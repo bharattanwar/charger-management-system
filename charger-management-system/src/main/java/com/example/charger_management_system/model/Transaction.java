@@ -1,12 +1,12 @@
 package com.example.charger_management_system.model;
 
 import jakarta.persistence.*;
-
-import java.security.Timestamp;
+import java.sql.Timestamp;
 
 @Entity
 @Table(name = "transactions")
 public class Transaction {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long transactionId;
@@ -21,8 +21,7 @@ public class Transaction {
 
     private Integer meterStop;
 
-    // Constructors, getters, setters
-    public Transaction(){}
+    public Transaction() {}
 
     public Transaction(String chargerId, Timestamp startTime, Timestamp stopTime, Integer meterStart, Integer meterStop) {
         this.chargerId = chargerId;
@@ -31,6 +30,8 @@ public class Transaction {
         this.meterStart = meterStart;
         this.meterStop = meterStop;
     }
+
+    // Getters and setters...
 
     public Long getTransactionId() {
         return transactionId;
@@ -78,5 +79,17 @@ public class Transaction {
 
     public void setMeterStop(Integer meterStop) {
         this.meterStop = meterStop;
+    }
+
+    @Override
+    public String toString() {
+        return "Transaction{" +
+                "transactionId=" + transactionId +
+                ", chargerId='" + chargerId + '\'' +
+                ", startTime=" + startTime +
+                ", stopTime=" + stopTime +
+                ", meterStart=" + meterStart +
+                ", meterStop=" + meterStop +
+                '}';
     }
 }

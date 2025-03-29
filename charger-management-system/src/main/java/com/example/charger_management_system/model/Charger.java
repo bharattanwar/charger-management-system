@@ -3,8 +3,7 @@ package com.example.charger_management_system.model;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-
-import java.security.Timestamp;
+import java.sql.Timestamp;
 
 @Entity
 @Table(name = "chargers")
@@ -17,14 +16,15 @@ public class Charger {
 
     private Timestamp lastHeartbeat;
 
-    // Constructors, getters, setters
-    public Charger(){}
+    public Charger() {}
 
     public Charger(String chargerId, String status, Timestamp lastHeartbeat) {
         this.chargerId = chargerId;
         this.status = status;
         this.lastHeartbeat = lastHeartbeat;
     }
+
+    // Getters and setters...
 
     public String getChargerId() {
         return chargerId;
