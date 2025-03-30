@@ -6,6 +6,9 @@ import com.example.charger_management_system.repository.ChargerRepository;
 import com.example.charger_management_system.repository.TransactionRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -24,6 +27,7 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ChargerRepository chargerRepository;
     private final TransactionRepository transactionRepository;
+    private static final Logger logger = LoggerFactory.getLogger(OcppWebSocketHandler.class);
 
     public OcppWebSocketHandler(ChargerRepository chargerRepository, TransactionRepository transactionRepository) {
         this.chargerRepository = chargerRepository;
@@ -37,39 +41,44 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
             JsonNode json = objectMapper.readTree(payload);
             processOcppMessage(session, json);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Error processing message: {}", e.getMessage(), e);
+            sendErrorResponse(session, "Invalid message format.");
         }
     }
 
     private void processOcppMessage(WebSocketSession session, JsonNode json) throws IOException {
-        int messageType = json.get(0).asInt();
-        String messageId = json.get(1).asText();
-        String action = json.get(2).asText();
-        JsonNode payload = json.get(3);
+        try {
+            int messageType = json.get(0).asInt();
+            String messageId = json.get(1).asText();
+            String action = json.get(2).asText();
+            JsonNode payload = json.get(3);
 
-        System.out.println("Processing action: " + action);
-        System.out.println("Before switch statement");
+            logger.info("Processing action: {}", action);
 
-        switch (action) {
-            case "BootNotification":
-                handleBootNotification(session, messageId, payload);
-                break;
-            case "Heartbeat":
-                handleHeartbeat(session, messageId, payload);
-                break;
-            case "StatusNotification":
-                handleStatusNotification(session, messageId, payload);
-                break;
-            case "StartTransaction":
-                handleStartTransaction(session, messageId, payload);
-                break;
-            case "StopTransaction":
-                handleStopTransaction(session, messageId, payload);
-                break;
-            default:
-                System.out.println("Unknown action: " + action);
+            switch (action) {
+                case "BootNotification":
+                    handleBootNotification(session, messageId, payload);
+                    break;
+                case "Heartbeat":
+                    handleHeartbeat(session, messageId, payload);
+                    break;
+                case "StatusNotification":
+                    handleStatusNotification(session, messageId, payload);
+                    break;
+                case "StartTransaction":
+                    handleStartTransaction(session, messageId, payload);
+                    break;
+                case "StopTransaction":
+                    handleStopTransaction(session, messageId, payload);
+                    break;
+                default:
+                    System.out.println("Unknown action: " + action);
+                    sendErrorResponse(session, messageId, "Unknown action.");
+            }
+        } catch (Exception e) {
+            logger.error("Error processing action: {}", e.getMessage(), e);
+            sendErrorResponse(session, "Internal server error.");
         }
-        System.out.println("After switch statement");
     }
 
     private void handleBootNotification(WebSocketSession session, String messageId, JsonNode payload) throws IOException {
@@ -91,8 +100,13 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
             System.out.println("Heartbeat received from: " + chargerId);
             Charger charger = chargerRepository.findById(chargerId).orElse(null);
             if (charger != null) {
-                charger.setLastHeartbeat(Timestamp.from(Instant.now()));
-                chargerRepository.save(charger);
+                try{
+                    chargerRepository.save(charger);
+                    logger.info("Heartbeat saved successfully.");
+                }catch (Exception e){
+                    logger.error("Error saving heartbeat: {}", e.getMessage(), e);
+                    e.printStackTrace();
+                }
             }
             sendResponse(session, messageId, "Heartbeat", "{}");
         }
@@ -112,24 +126,30 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleStartTransaction(WebSocketSession session, String messageId, JsonNode payload) throws IOException {
-        System.out.println("handleStartTransaction called");
+        logger.info("handleStartTransaction called");
         String chargerId = getChargerIdFromSession(session);
         if (chargerId != null) {
+            if (!payload.has("meterStart") || !payload.has("idTag")) {
+                logger.warn("Invalid StartTransaction payload.");
+                sendErrorResponse(session, messageId, "Invalid payload.");
+                return;
+            }
+
             Timestamp startTime = Timestamp.from(Instant.now());
             int meterStart = payload.get("meterStart").asInt();
             Transaction transaction = new Transaction(chargerId, startTime, null, meterStart, null);
 
-            System.out.println("StartTransaction: ChargerId=" + chargerId + ", meterStart=" + meterStart);
-            System.out.println("Transaction to save: " + transaction);
+            logger.info("StartTransaction: ChargerId={}, meterStart={}", chargerId, meterStart);
+            logger.info("Transaction to save: {}", transaction);
             try {
-                transactionRepository.save(transaction);
-                System.out.println("Transaction saved successfully.");
+                saveTransactionAsync(transaction);
+                logger.info("Transaction saved successfully.");
             } catch (Exception e) {
-                System.err.println("Error saving transaction: " + e.getMessage());
+                logger.error("Error saving transaction: {}", e.getMessage(), e);
                 e.printStackTrace();
             }
 
-            sendResponse(session, messageId, "StartTransaction", "{\"idTagInfo\":{\"status\":\"Accepted\"},\"transactionId\":"+transaction.getTransactionId()+"}");
+            sendResponse(session, messageId, "StartTransaction", "{\"idTagInfo\":{\"status\":\"Accepted\"},\"transactionId\":" + transaction.getTransactionId() + "}");
         }
     }
 
@@ -140,9 +160,13 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
             int meterStop = payload.get("meterStop").asInt();
             Transaction transaction = transactionRepository.findById(transactionId).orElse(null);
             if (transaction != null) {
-                transaction.setStopTime(Timestamp.from(Instant.now()));
-                transaction.setMeterStop(meterStop);
-                transactionRepository.save(transaction);
+                try{
+                    transactionRepository.save(transaction);
+                    logger.info("Transaction stopped successfully.");
+                }catch (Exception e){
+                    logger.error("Error stopping transaction: {}", e.getMessage(), e);
+                    e.printStackTrace();
+                }
             }
             sendResponse(session, messageId, "StopTransaction", "{\"idTagInfo\":{\"status\":\"Accepted\"}}");
         }
@@ -162,5 +186,21 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
             }
         }
         return null;
+    }
+
+    private void sendErrorResponse(WebSocketSession session, String errorMessage) throws IOException {
+        String response = String.format("[4,\"%s\"]", errorMessage);
+        session.sendMessage(new TextMessage(response));
+    }
+
+    private void sendErrorResponse(WebSocketSession session, String messageId, String errorMessage) throws IOException {
+        String response = String.format("[4,\"%s\",\"%s\"]", messageId, errorMessage);
+        session.sendMessage(new TextMessage(response));
+    }
+
+    @Async
+    public void saveTransactionAsync(Transaction transaction) {
+        transactionRepository.save(transaction);
+        logger.info("Transaction saved asynchronously.");
     }
 }
