@@ -35,14 +35,27 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        String token = session.getUri().getQuery();
+        if (token == null || !token.equals("validToken")) {
+            session.close();
+            logger.warn("Unauthorized connection attempt.");
+            return;
+        }
+        logger.info("Connection established from: {}", session.getRemoteAddress());
+        super.afterConnectionEstablished(session);
+    }
+
+    @Override
     public void handleTextMessage(WebSocketSession session, TextMessage message) throws IOException {
+        logger.info("Received message: {}", message.getPayload());
         String payload = message.getPayload();
         try {
             JsonNode json = objectMapper.readTree(payload);
             processOcppMessage(session, json);
         } catch (Exception e) {
             logger.error("Error processing message: {}", e.getMessage(), e);
-            sendErrorResponse(session, "Invalid message format.");
+            sendErrorResponse(session, "Invalid message format.", 400);
         }
     }
 
@@ -72,20 +85,19 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
                     handleStopTransaction(session, messageId, payload);
                     break;
                 default:
-                    System.out.println("Unknown action: " + action);
-                    sendErrorResponse(session, messageId, "Unknown action.");
+                    logger.warn("Unknown action: {}", action);
+                    sendErrorResponse(session, messageId, "Unknown action.", 400);
             }
         } catch (Exception e) {
             logger.error("Error processing action: {}", e.getMessage(), e);
-            sendErrorResponse(session, "Internal server error.");
+            sendErrorResponse(session, "Internal server error.", 500);
         }
     }
 
     private void handleBootNotification(WebSocketSession session, String messageId, JsonNode payload) throws IOException {
         String chargerId = payload.get("chargePointSerialNumber").asText();
         sessions.put(chargerId, session);
-        System.out.println("BootNotification received from: " + chargerId);
-        System.out.println("Current Sessions map: " + sessions);
+        logger.info("BootNotification received from: {}. Current Sessions map: {}", chargerId, sessions);
 
         Charger charger = chargerRepository.findById(chargerId).orElse(new Charger(chargerId, "Available", Timestamp.from(Instant.now())));
         charger.setLastHeartbeat(Timestamp.from(Instant.now()));
@@ -97,13 +109,13 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
     private void handleHeartbeat(WebSocketSession session, String messageId, JsonNode payload) throws IOException {
         String chargerId = getChargerIdFromSession(session);
         if (chargerId != null) {
-            System.out.println("Heartbeat received from: " + chargerId);
+            logger.info("Heartbeat received from: {}", chargerId);
             Charger charger = chargerRepository.findById(chargerId).orElse(null);
             if (charger != null) {
-                try{
+                try {
                     chargerRepository.save(charger);
                     logger.info("Heartbeat saved successfully.");
-                }catch (Exception e){
+                } catch (Exception e) {
                     logger.error("Error saving heartbeat: {}", e.getMessage(), e);
                     e.printStackTrace();
                 }
@@ -131,7 +143,7 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
         if (chargerId != null) {
             if (!payload.has("meterStart") || !payload.has("idTag")) {
                 logger.warn("Invalid StartTransaction payload.");
-                sendErrorResponse(session, messageId, "Invalid payload.");
+                sendErrorResponse(session, messageId, "Invalid payload.", 400);
                 return;
             }
 
@@ -160,10 +172,12 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
             int meterStop = payload.get("meterStop").asInt();
             Transaction transaction = transactionRepository.findById(transactionId).orElse(null);
             if (transaction != null) {
-                try{
+                try {
+                    transaction.setStopTime(Timestamp.from(Instant.now()));
+                    transaction.setMeterStop(meterStop);
                     transactionRepository.save(transaction);
                     logger.info("Transaction stopped successfully.");
-                }catch (Exception e){
+                } catch (Exception e) {
                     logger.error("Error stopping transaction: {}", e.getMessage(), e);
                     e.printStackTrace();
                 }
@@ -178,8 +192,7 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
     }
 
     private String getChargerIdFromSession(WebSocketSession session) {
-        System.out.println("getChargerIdFromSession called");
-        System.out.println("Current Sessions map: " + sessions);
+        logger.info("getChargerIdFromSession called. Current Sessions map: {}", sessions);
         for (Map.Entry<String, WebSocketSession> entry : sessions.entrySet()) {
             if (entry.getValue().equals(session)) {
                 return entry.getKey();
@@ -188,13 +201,13 @@ public class OcppWebSocketHandler extends TextWebSocketHandler {
         return null;
     }
 
-    private void sendErrorResponse(WebSocketSession session, String errorMessage) throws IOException {
-        String response = String.format("[4,\"%s\"]", errorMessage);
+    private void sendErrorResponse(WebSocketSession session, String errorMessage, int errorCode) throws IOException {
+        String response = String.format("[4,{\"code\":%d,\"message\":\"%s\"}]", errorCode, errorMessage);
         session.sendMessage(new TextMessage(response));
     }
 
-    private void sendErrorResponse(WebSocketSession session, String messageId, String errorMessage) throws IOException {
-        String response = String.format("[4,\"%s\",\"%s\"]", messageId, errorMessage);
+    private void sendErrorResponse(WebSocketSession session, String messageId, String errorMessage, int errorCode) throws IOException {
+        String response = String.format("[4,\"%s\",{\"code\":%d,\"message\":\"%s\"}]", messageId, errorCode, errorMessage);
         session.sendMessage(new TextMessage(response));
     }
 
